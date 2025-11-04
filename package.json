@@ -1,0 +1,15 @@
+{
+  "name": "retell-call-app",
+  "version": "1.0.0",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "body-parser": "^1.20.2",
+    "dotenv": "^16.4.0",
+    "express": "^4.18.2",
+    "retell-sdk": "^4.56.0"
+  }
+}
