@@ -6,7 +6,7 @@ import RetellClient from "retell-sdk";
 dotenv.config();
 
 const app = express();
-const port = 3000;
+const port = process.env.PORT || 3000;
 
 const client = new RetellClient({
   apiKey: process.env.RETELL_API_KEY,
@@ -15,7 +15,37 @@ const client = new RetellClient({
 app.use(bodyParser.json());
 app.use(express.static("public"));
 
-// Serve the beautiful form
+/**
+ * Agent mapping
+ * Keys correspond to select option values from the client
+ * Replace these strings if you have different agent ids
+ */
+const AGENTS = {
+  compareCoverage: "agent_b59ef1b023288df02d47c215f0",
+  chooseYourPlan: "agent_29efd07600ffde2960c52d6a02",
+  completePayment: "agent_af49ca02889c8c7de9faa1f823",
+  completeOnboarding: "agent_e51abee9f7bd9fccd7b35ba903",
+};
+
+/**
+ * Optional per-agent version map:
+ * - You can set env vars like AGENT_VERSION_compareCoverage=2
+ * - If not provided, the code will use process.env.AGENT_VERSION (global) if present
+ */
+function getAgentVersionForKey(key) {
+  const envKey = `AGENT_VERSION_${key}`; // e.g. AGENT_VERSION_compareCoverage
+  if (process.env[envKey]) {
+    const v = parseInt(process.env[envKey], 10);
+    return Number.isFinite(v) ? v : undefined;
+  }
+  if (process.env.AGENT_VERSION) {
+    const v = parseInt(process.env.AGENT_VERSION, 10);
+    return Number.isFinite(v) ? v : undefined;
+  }
+  return undefined;
+}
+
+// Serve the beautiful form (with dropdown)
 app.get("/", (req, res) => {
   res.send(`
     <!DOCTYPE html>
@@ -39,12 +69,26 @@ app.get("/", (req, res) => {
               class="w-full border border-gray-300 rounded-xl px-4 py-2 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
               placeholder="John Doe" />
           </div>
+
           <div>
             <label class="block text-gray-700 font-semibold mb-2">Phone Number (E.164)</label>
             <input type="text" name="phone" id="phone" required
               class="w-full border border-gray-300 rounded-xl px-4 py-2 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
               placeholder="+91XXXXXXXXXX" />
           </div>
+
+          <div>
+            <label class="block text-gray-700 font-semibold mb-2">Test Category</label>
+            <select id="agentKey" name="agentKey" required
+              class="w-full border border-gray-300 rounded-xl px-4 py-2 focus:ring-2 focus:ring-indigo-500 focus:outline-none">
+              <option value="compareCoverage">Compare Coverage</option>
+              <option value="chooseYourPlan">Choose Your Plan</option>
+              <option value="completePayment">Complete Payment</option>
+              <option value="completeOnboarding">Complete Onboarding</option>
+            </select>
+            <p class="text-xs text-gray-500 mt-1">Select which agent to test — the server will route the call to that agent id.</p>
+          </div>
+
           <button type="submit"
             class="w-full bg-indigo-600 text-white font-bold py-2 rounded-xl hover:bg-indigo-700 transition-all duration-300">
             🚀 Call Now
@@ -64,24 +108,33 @@ app.get("/", (req, res) => {
           
           const name = document.getElementById('name').value.trim();
           const phone = document.getElementById('phone').value.trim();
+          const agentKey = document.getElementById('agentKey').value;
 
-          const response = await fetch('/call', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, phone })
-          });
+          // basic client-side phone normalization: ensure starts with +
+          const normalizedPhone = phone.startsWith('+') ? phone : '+' + phone;
 
-          const data = await response.json();
-          if (data.success) {
-            responseBox.innerHTML = \`
-              ✅ <b>Call initiated successfully!</b><br>
-              <b>Call ID:</b> \${data.call_id}<br>
-              <b>Status:</b> \${data.call_status}
-            \`;
-          } else {
-            responseBox.innerHTML = \`
-              ❌ <b>Error:</b> \${data.message || 'Unable to create call.'}
-            \`;
+          try {
+            const response = await fetch('/call', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ name, phone: normalizedPhone, agentKey })
+            });
+
+            const data = await response.json();
+            if (data.success) {
+              responseBox.innerHTML = \`
+                ✅ <b>Call initiated successfully!</b><br>
+                <b>Call ID:</b> \${data.call_id}<br>
+                <b>Status:</b> \${data.call_status}<br>
+                <b>Agent:</b> \${data.agent_id || 'default'}
+              \`;
+            } else {
+              responseBox.innerHTML = \`
+                ❌ <b>Error:</b> \${data.message || 'Unable to create call.'}
+              \`;
+            }
+          } catch (err) {
+            responseBox.innerHTML = '❌ <b>Error:</b> ' + (err.message || 'Unknown error');
           }
         });
       </script>
@@ -93,29 +146,49 @@ app.get("/", (req, res) => {
 // API endpoint
 app.post("/call", async (req, res) => {
   try {
-    const { name, phone } = req.body;
+    const { name, phone, agentKey } = req.body;
+
+    if (!name || !phone) {
+      return res.json({ success: false, message: "Missing name or phone" });
+    }
+
     const formattedPhone = phone.startsWith("+") ? phone : "+" + phone;
 
-    const response = await client.call.createPhoneCall({
+    // pick agent id from map; fallback to global env AGENT_ID if not found
+    const selectedAgentId = AGENTS[agentKey] || process.env.AGENT_ID;
+    const selectedAgentVersion = getAgentVersionForKey(agentKey);
+
+    // build call payload
+    const callPayload = {
       from_number: process.env.FROM_NUMBER,
       to_number: formattedPhone,
-      override_agent_id: process.env.AGENT_ID,
-      override_agent_version: parseInt(process.env.AGENT_VERSION),
       retell_llm_dynamic_variables: {
-      name:name
-  },
-    });
+        name: name
+      }
+    };
+
+    if (selectedAgentId) {
+      callPayload.override_agent_id = selectedAgentId;
+    }
+    // only include version if it's defined and a number
+    if (typeof selectedAgentVersion === "number") {
+      callPayload.override_agent_version = selectedAgentVersion;
+    }
+
+    const response = await client.call.createPhoneCall(callPayload);
 
     res.json({
       success: true,
       call_id: response.call_id,
       call_status: response.call_status,
+      agent_id: selectedAgentId,
+      agent_version: selectedAgentVersion,
     });
   } catch (error) {
     console.error("Error:", error);
     res.json({
       success: false,
-      message: error?.error?.message || "Unknown error occurred",
+      message: error?.error?.message || error.message || "Unknown error occurred",
     });
   }
 });
