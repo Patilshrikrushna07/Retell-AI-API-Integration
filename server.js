@@ -21,10 +21,10 @@ app.use(express.static("public"));
  * Replace these strings if you have different agent ids
  */
 const AGENTS = {
-  compareCoverage: "agent_b59ef1b023288df02d47c215f0",
-  chooseYourPlan: "agent_29efd07600ffde2960c52d6a02",
-  completePayment: "agent_af49ca02889c8c7de9faa1f823",
-  completeOnboarding: "agent_e51abee9f7bd9fccd7b35ba903",
+  compareCoverage: "agent_5c35a64fa13e88b5c7c3eac234",
+  chooseYourPlan: "agent_ecc3b338b585ff3fc18ab6f6c9",
+  completePayment: "agent_5eb050b2d4800fe5461953a328",
+  completeOnboarding: "agent_dd651bab92cda76d26ced5c988",
 };
 
 /**
